@@ -96,10 +96,10 @@ async fn data_prices(client: Client) -> DataPrices {
 
 async fn list_linodes(client: Client, auth_header: (HeaderName, String)) {
     let url = format!("https://api.linode.com/{API_VERSION}/linode/instances");
-    let header_two = ("accept", "application/json");
+    let accept_header = ("accept", "application/json");
     
     let response = client.get(url)
-        .insert_header(header_two)
+        .insert_header(accept_header)
         .insert_header(auth_header)
         .send()
         .await;
@@ -113,7 +113,7 @@ async fn list_linodes(client: Client, auth_header: (HeaderName, String)) {
 
             // 2. PRINT THE PAYLOAD HERE
             // This will print the entire JSON structure in a readable format
-            println!("DEBUG PAYLOAD: {}", serde_json::to_string_pretty(&object).unwrap());
+            //println!("DEBUG PAYLOAD: {}", serde_json::to_string_pretty(&object).unwrap());
 
             // 3. Now try to deserialize
             let vms: Vec<LinodeVMObject> = serde_json::from_value(object["data"].clone())
