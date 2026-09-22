@@ -6,30 +6,6 @@ use std::env;
 
 const API_VERSION: &str = "v4";
 
-//Object {"alerts": Object {"cpu": Number(180), "io": Number(10000), 
-//"network_in": Number(10), "network_out": Number(10), 
-//"transfer_quota": Number(80)}, "backups": Object {"available": Bool(false), 
-//"enabled": Bool(false), "last_successful": Null, "schedule": 
-//Object {"day": Null, "window": Null}}, "capabilities": 
-//Array [String("Block Storage Encryption"), String("SMTP Enabled"), 
-//String("Maintenance Policy")], "created": String("2023-07-01T17:08:52"), 
-//"disk_encryption": String("disabled"), "group": String(""), 
-//"has_user_data": Bool(false), 
-//"host_uuid": String("10bbee6d80a94bfae3c777a41d6c416af4a53e8f"),
-//"hypervisor": String("kvm"), "id": Number(47397626),
-//"image": String("linode/debian12"),
-//"interface_generation": String("legacy_config"),
-//"ipv4": Array [String("170.187.153.238"), String("192.168.146.93")],
-//"ipv6": String("2600:3c02::f03c:93ff:fe8d:260d/128"),
-//"label": String("pihole"), "lke_cluster_id": Null,
-//"maintenance_policy": String("linode/migrate"),
-//"placement_group": Null, "region": String("us-southeast"),
-//"site_type": String("core"), "specs": Object {"accelerated_devices": Number(0),
-//"disk": Number(81920), "gpus": Number(0), "memory": Number(4096),
-//"transfer": Number(4000), "vcpus": Number(2)}, "status": String("running"),
-//"tags": Array [String("dns")], "type": String("g6-standard-2"),
-//"updated": String("2026-07-03T04:29:17"), "watchdog_enabled": Bool(true)}
-
 #[derive(Serialize, Deserialize, Debug)]
 struct LinodeVMObject {
     alerts: LinodeObject,
