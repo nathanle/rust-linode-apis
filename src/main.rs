@@ -1,19 +1,21 @@
-use reqwest::header::HeaderName;
-use serde::{Deserialize, Serialize};
-use ratatui::{
-    backend::CrosstermBackend,
-    layout::{Constraint, Direction, Layout},
-    style::{Color, Style},
-    widgets::{Block, Borders, List, ListItem, Paragraph},
-    Terminal,
-};
 use crossterm::event::{self, Event, KeyCode};
-use std::io::{stdout, Write};
-use std::collections::HashMap;
+use crossterm::terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen};
+use crossterm::execute;
+use ratatui::backend::CrosstermBackend;
+use ratatui::layout::{Constraint, Direction, Layout};
+use ratatui::style::{Color, Style};
+use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph};
+use ratatui::Terminal;
+use ratatui::widgets::canvas::{Canvas, Map, MapResolution, Points, Rectangle};
+
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap; // Added missing import
+use std::io::stdout;           // Added missing import
 
 const API_VERSION: &str = "v4";
 
 // --- DATA MODELS ---
+
 #[derive(Serialize, Deserialize, Debug, Clone)]
 struct LinodeVMObject {
     id: i32,
@@ -35,23 +37,55 @@ struct LinodeResponse {
     data: Vec<LinodeVMObject>,
 }
 
-// --- MAP COORDINATES ---
-// You can adjust these coordinates to "shape" the map as you like!
-fn get_region_coords(region: &str) -> Option<(u16, u16)> {
-    match region {
-        "us-east" => Some((10, 15)),
-        "us-southeast" => Some((15, 12)),
-        "us-west" => Some((5, 10)),
-        "us-ord" => Some((12, 18)),
-        "eu-north" => Some((25, 15)),
-        "ap-southeast" => Some((35, 10)),
-        "ap-northeast" => Some((35, 20)),
-        _ => Some((0, 0)), // Default for unknown regions
+// --- DATA FETCHING ---
+
+async fn fetch_linodes(api_key: &str) -> Vec<LinodeVMObject> {
+    let client = reqwest::Client::new();
+    let url = format!("https://api.linode.com/{API_VERSION}/linode/instances");
+
+    let response = client
+        .get(url)
+        .header("Authorization", format!("Bearer {}", api_key))
+        .header("Accept", "application/json")
+        .send()
+        .await;
+
+    match response {
+        Ok(res) => {
+            let body = res.text().await.unwrap_or_default();
+            let obj: serde_json::Value = serde_json::from_str(&body).expect("Invalid JSON format");
+            if let Some(data_array) = obj["data"].as_array() {
+                data_array.iter()
+                    .filter_map(|item| serde_json::from_value::<LinodeVMObject>(item.clone()).ok())
+                    .collect()
+            } else {
+                vec![]
+            }
+        }
+        Err(e) => {
+            eprintln!("Request failed: {}", e);
+            vec![]
+        }
     }
 }
 
-// --- APP STATE ---
-#[derive(PartialEq, Debug)]
+// Helper to map region names to coordinates
+fn get_coords_for_region(region: &str) -> (f64, f64) {
+    match region {
+        "us-east" => (-75.0, 38.0),
+        "us-southeast" => (-81.0, 33.0),
+        "us-ord" => (-87.0, 41.0),
+        "us-west" => (-120.0, 37.0),
+        "eu-north" => (10.0, 50.0),
+        "ap-southeast" => (118.0, -3.0),
+        "ap-northeast" => (139.0, 35.0),
+        _ => (0.0, 0.0),
+    }
+}
+
+// --- TUI STATE ---
+
+#[derive(Debug, PartialEq)]
 enum ViewMode {
     List,
     Detail,
@@ -87,14 +121,15 @@ impl App {
 }
 
 // --- UI RENDERING ---
+
 fn ui(f: &mut ratatui::Frame, app: &App) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Length(3), Constraint::Min(0)].as_ref())
-        .split(f.size());
+        .split(f.area());
 
     let header = Paragraph::new(format!(
-        "Linode Manager | Mode: {:?} | Press 'm' for Map, 'l' for List, 'd' for Details, 'q' to quit",
+        "Linode Manager | Mode: {:?} | [m]ap [l]ist [d]etail [q]uit",
         app.view_mode
     ))
     .block(Block::default().borders(Borders::ALL));
@@ -132,86 +167,64 @@ fn ui(f: &mut ratatui::Frame, app: &App) {
             }
         }
         ViewMode::Map => {
-            // Aggregate counts by region
             let mut counts: HashMap<String, usize> = HashMap::new();
             for vm in &app.vms {
                 *counts.entry(vm.region.clone()).or_insert(0) += 1;
             }
 
-            // Create a grid buffer (40 columns wide, 20 rows high)
-            let mut grid = vec![" ".to_string(); 40 * 20];
+            let canvas = Canvas::default()
+                .x_bounds([-180.0, 180.0])
+                .y_bounds([-90.0, 90.0])
+                .paint(|ctx| {
+                    ctx.draw(&Map {
+                        resolution: MapResolution::High,
+                        color: Color::White,
+                    });
 
-            // Draw a border
-            for x in 0..40 {
-                grid[x] = "|".to_string();             // Top
-                grid[x + 40 * 19] = "|".to_string();   // Bottom
-            }
-            for y in 0..20 {
-                grid[y] = "-".to_string();              // Left
-                grid[y + 40 - 1] = "-".to_string();     // Right
-            }
-
-            // Plot the dots
-            for (region, count) in counts {
-                if let Some((x, y)) = get_region_coords(&region) {
-                    // Adjusting for 0-indexed grid and flipping Y (since terminal rows go down)
-                    let grid_x = x as usize;
-                    let grid_y = (19 - y as usize) as usize;
-                    
-                    if grid_x < 40 && grid_y < 20 {
-                        grid[grid_y * 40 + grid_x] = "•".to_string();
-                        // Add count next to it
-                        if grid_x + 2 < 40 {
-                            grid[grid_y * 40 + grid_x + 2] = count.to_string();
-                        }
+                    let mut points = Vec::new();
+                    for vm in &app.vms {
+                        let (lon, lat) = get_coords_for_region(&vm.region);
+                        points.push((lon, lat));
                     }
-                }
-            }
 
-            let map_str: String = grid.into_iter().collect();
-            let map_widget = Paragraph::new(map_str)
-                .block(Block::default().title("Geographic Distribution").borders(Borders::ALL));
-            f.render_widget(map_widget, chunks[1]);
+                    // Fixed: Borrow the points vector here
+                    ctx.draw(&Points {
+                        coords: &points,
+                        color: Color::Yellow,
+                    });
+
+                    if let Some(vm) = app.vms.get(app.selected_index) {
+                        let (lon, lat) = get_coords_for_region(&vm.region);
+                        ctx.draw(&Rectangle {
+                            x: lon + 2.0,
+                            y: lat - 1.0,
+                            width: 4.0,
+                            height: 1.0,
+                            color: Color::Cyan,
+                        });
+                    }
+                });
+
+            f.render_widget(canvas, chunks[1]);
         }
-    }
-}
-
-// --- FETCHING LOGIC ---
-async fn fetch_linodes(api_key: &str) -> Vec<LinodeVMObject> {
-    let client = reqwest::Client::new();
-    let url = format!("https://api.linode.com/{API_VERSION}/linode/instances");
-
-    let response = client
-        .get(url)
-        .header("Authorization", format!("Bearer {}", api_key))
-        .header("Accept", "application/json")
-        .send()
-        .await;
-
-    match response {
-        Ok(res) => {
-            let body = res.text().await.unwrap_or_default();
-            let obj: serde_json::Value = serde_json::from_str(&body).expect("Invalid JSON");
-            if let Some(data_array) = obj["data"].as_array() {
-                data_array.iter()
-                    .filter_map(|item| serde_json::from_value::<LinodeVMObject>(item.clone()).ok())
-                    .collect()
-            } else {
-                vec![]
-            }
-        }
-        Err(_) => vec![],
     }
 }
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let api_key = std::env::var("LINODE_RUST_PAT").expect("Set LINODE_RUST_PAT env var");
+    
+    println!("Fetching linodes...");
     let vms = fetch_linodes(&api_key).await;
 
-    crossterm::terminal::enable_raw_mode()?;
-    let mut stdout = std::io::stdout();
-    crossterm::execute!(stdout, crossterm::terminal::EnterAlternateScreen)?;
+    if vms.is_empty() {
+        println!("No linodes found or error occurred.");
+        return Ok(());
+    }
+
+    enable_raw_mode()?;
+    let mut stdout = stdout();
+    execute!(stdout, EnterAlternateScreen)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
@@ -233,7 +246,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    crossterm::terminal::disable_raw_mode()?;
-    crossterm::execute!(terminal.backend_mut(), crossterm::terminal::LeaveAlternateScreen)?;
+    disable_raw_mode()?;
+    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
     Ok(())
 }
